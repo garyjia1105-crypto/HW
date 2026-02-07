@@ -18,7 +18,7 @@ def test_chat_endpoint_responds():
     assert r.status_code in (200, 500)
     raw = r.json()
     body = raw[0] if isinstance(raw, list) and len(raw) == 2 and isinstance(raw[0], dict) else raw
-    assert ("answer" in body) or ("error" in body)
+    assert ("answer" in body) or ("error" in body) or ("detail" in body)
 
 def test_ui_route_serves_html():
     r = client.get("/ui")

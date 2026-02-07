@@ -172,6 +172,14 @@ if (GUEST) {
   chatView.classList.remove('hidden');
   document.getElementById('signout').style.display = 'none';
 } else {
+  fetch('/api/status').then(r => r.json()).then(s => {
+    if (!s.mongo) {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'padding:12px;background:#f44336;color:white;text-align:center;';
+      msg.textContent = 'Database not configured. Please add MONGODB_URI in Railway.';
+      document.querySelector('.content').insertBefore(msg, document.querySelector('.content').firstChild);
+    }
+  }).catch(() => {});
   checkAuth();
 }
 

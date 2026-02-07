@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -30,11 +31,23 @@ JWT_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
+_db_client = None
+_db = None
+
 def get_db():
+    global _db_client, _db
     if not MONGODB_URI:
         return None
-    client = MongoClient(MONGODB_URI)
-    return client.get_default_database()
+    if _db is not None:
+        return _db
+    try:
+        _db_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        _db = _db_client.get_default_database()
+        _db_client.admin.command("ping")  # verify connection
+        return _db
+    except Exception as e:
+        print(f"MongoDB connection error: {e}")
+        return None
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -99,6 +112,13 @@ Helpful Answer: """
     return rag_chain
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class Query(BaseModel):
     question: str
@@ -122,21 +142,32 @@ def ui():
     ui_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
     return FileResponse(ui_path)
 
+@app.get("/api/status")
+def api_status():
+    db = get_db()
+    return {"mongo": db is not None}
+
 @app.post("/auth/signup")
 def auth_signup(body: SignUp):
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Database not configured")
-    users = db["users"]
-    existing = users.find_one({"email": body.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    hashed = pwd_context.hash(body.password)
-    doc = {"email": body.email, "password": hashed, "createdAt": datetime.utcnow()}
-    result = users.insert_one(doc)
-    user_id = str(result.inserted_id)
-    token = create_access_token({"sub": user_id, "email": body.email})
-    return {"token": token, "user": {"id": user_id, "email": body.email}}
+    try:
+        users = db["users"]
+        existing = users.find_one({"email": body.email})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        hashed = pwd_context.hash(body.password)
+        doc = {"email": body.email, "password": hashed, "createdAt": datetime.utcnow()}
+        result = users.insert_one(doc)
+        user_id = str(result.inserted_id)
+        token = create_access_token({"sub": user_id, "email": body.email})
+        return {"token": token, "user": {"id": user_id, "email": body.email}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Signup error: {e}")
+        raise HTTPException(status_code=503, detail="Database error")
 
 class Login(BaseModel):
     email: str
@@ -147,13 +178,19 @@ def auth_login(body: Login):
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Database not configured")
-    users = db["users"]
-    user = users.find_one({"email": body.email})
-    if not user or not pwd_context.verify(body.password, user.get("password", "")):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    user_id = str(user["_id"])
-    token = create_access_token({"sub": user_id, "email": user["email"]})
-    return {"token": token, "user": {"id": user_id, "email": user["email"]}}
+    try:
+        users = db["users"]
+        user = users.find_one({"email": body.email})
+        if not user or not pwd_context.verify(body.password, user.get("password", "")):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        user_id = str(user["_id"])
+        token = create_access_token({"sub": user_id, "email": user["email"]})
+        return {"token": token, "user": {"id": user_id, "email": user["email"]}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Login error: {e}")
+        raise HTTPException(status_code=503, detail="Database error")
 
 @app.get("/auth/me")
 def auth_me(user: dict = Depends(get_current_user)):
@@ -197,8 +234,7 @@ def chat(query: Query):
         answer = chain.invoke(query.question)
         return {"answer": f"Helpful Answer: V5 {answer}"}
     except Exception as e:
-        # Return error message
-        return {"error": str(e)}, 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
