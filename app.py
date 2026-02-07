@@ -14,6 +14,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 
 # MongoDB + Auth
 from pymongo import MongoClient
+from pymongo.errors import ConfigurationError
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 
@@ -24,6 +25,7 @@ else:
     print("OPENAI_API_KEY is set")
 
 MONGODB_URI = os.environ.get("MONGODB_URI")
+MONGODB_URI_STANDARD = os.environ.get("MONGODB_URI_STANDARD")  # fallback: use standard mongodb:// if mongodb+srv fails
 JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
@@ -36,18 +38,24 @@ _db = None
 
 def get_db():
     global _db_client, _db
-    if not MONGODB_URI:
+    uris_to_try = [u for u in (MONGODB_URI, MONGODB_URI_STANDARD) if u]
+    if not uris_to_try:
         return None
     if _db is not None:
         return _db
-    try:
-        _db_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-        _db = _db_client.get_default_database()
-        _db_client.admin.command("ping")  # verify connection
-        return _db
-    except Exception as e:
-        print(f"MongoDB connection error: {e}")
-        return None
+    for uri in uris_to_try:
+        try:
+            _db_client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+            _db = _db_client.get_default_database()
+            _db_client.admin.command("ping")
+            return _db
+        except ConfigurationError as e:
+            print(f"MongoDB ConfigurationError with {uri[:30]}...: {e}")
+            continue
+        except Exception as e:
+            print(f"MongoDB connection error: {e}")
+            continue
+    return None
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -144,22 +152,29 @@ def ui():
 
 @app.get("/api/status")
 def api_status():
-    mongo_uri_set = bool(MONGODB_URI)
+    uris = [u for u in (MONGODB_URI, MONGODB_URI_STANDARD) if u]
+    mongo_uri_set = bool(uris)
     db = None
     err = None
     if mongo_uri_set:
-        try:
-            client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-            db = client.get_default_database()
-            client.admin.command("ping")
-        except Exception as e:
-            err = type(e).__name__
-            if "auth" in str(e).lower() or "8000" in str(e):
-                err = "auth_failed"
-            elif "timeout" in str(e).lower():
-                err = "timeout"
-            elif "getaddrinfo" in str(e).lower() or "nodename" in str(e).lower():
-                err = "dns_error"
+        for uri in uris:
+            try:
+                client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+                db = client.get_default_database()
+                client.admin.command("ping")
+                break
+            except ConfigurationError:
+                err = "ConfigurationError"
+                continue
+            except Exception as e:
+                err = type(e).__name__
+                if "auth" in str(e).lower() or "8000" in str(e):
+                    err = "auth_failed"
+                elif "timeout" in str(e).lower():
+                    err = "timeout"
+                elif "getaddrinfo" in str(e).lower() or "nodename" in str(e).lower():
+                    err = "dns_error"
+                continue
     return {"mongo": db is not None, "mongo_uri_set": mongo_uri_set, "error": err}
 
 @app.post("/auth/signup")
