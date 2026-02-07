@@ -7,6 +7,6 @@ langchain-openai
 langchain-community
 faiss-cpu
 tiktoken
-pymongo
+pymongo[srv]
 python-jose[cryptography]
 passlib[bcrypt]
