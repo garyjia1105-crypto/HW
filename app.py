@@ -70,7 +70,8 @@ def read_root():
 
 @app.get("/ui")
 def ui():
-    return FileResponse("static/index.html")
+    ui_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
+    return FileResponse(ui_path)
 
 @app.get("/firebase-config")
 def firebase_config():
@@ -93,4 +94,5 @@ def chat(query: Query):
         # Return error message
         return {"error": str(e)}, 500
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
