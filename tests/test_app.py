@@ -25,9 +25,14 @@ def test_ui_route_serves_html():
     assert r.status_code == 200
     assert "text/html" in r.headers.get("content-type", "")
 
-def test_firebase_config_shape():
-    r = client.get("/firebase-config")
-    assert r.status_code == 200
-    body = r.json()
-    for k in ["apiKey", "authDomain", "projectId", "appId", "messagingSenderId"]:
-        assert k in body
+def test_auth_login_no_db():
+    r = client.post("/auth/login", json={"email": "test@test.com", "password": "test123"})
+    assert r.status_code in (401, 503)
+
+def test_auth_signup_no_db():
+    r = client.post("/auth/signup", json={"email": "test@test.com", "password": "test123"})
+    assert r.status_code in (400, 503)
+
+def test_chats_unauthorized():
+    r = client.get("/chats")
+    assert r.status_code == 401

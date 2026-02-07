@@ -1,16 +1,5 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
 const GUEST = new URLSearchParams(window.location.search).get('guest') === '1';
-let auth = null;
-let db = null;
-if (!GUEST) {
-  const cfg = await fetch('/firebase-config').then(r => r.json());
-  const app = initializeApp(cfg);
-  auth = getAuth(app);
-  db = getFirestore(app);
-}
+const TOKEN_KEY = 'rag_token';
 
 const authView = document.getElementById('auth');
 const chatView = document.getElementById('chat');
@@ -20,7 +9,16 @@ const passwordInput = document.getElementById('password');
 const messages = document.getElementById('messages');
 const questionInput = document.getElementById('question');
 const sendBtn = document.getElementById('sendBtn');
+
 const nowTs = () => new Date().toLocaleTimeString();
+
+const api = (path, options = {}) => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const headers = { 'Content-Type': 'application/json', ...options.headers };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return fetch(path, { ...options, headers });
+};
+
 const renderUserMsg = (text, ts) => {
   const wrap = document.createElement('div');
   wrap.className = 'msg user';
@@ -38,6 +36,7 @@ const renderUserMsg = (text, ts) => {
   messages.appendChild(wrap);
   messages.scrollTop = messages.scrollHeight;
 };
+
 const renderBotMsg = (text, ts) => {
   const wrap = document.createElement('div');
   wrap.className = 'msg bot';
@@ -59,6 +58,7 @@ const renderBotMsg = (text, ts) => {
   messages.appendChild(wrap);
   messages.scrollTop = messages.scrollHeight;
 };
+
 const renderBotLoading = () => {
   const wrap = document.createElement('div');
   wrap.className = 'msg bot loading';
@@ -81,6 +81,7 @@ const renderBotLoading = () => {
   messages.scrollTop = messages.scrollHeight;
   return { wrap, bubble, t };
 };
+
 const typeText = async (el, text) => {
   el.textContent = '';
   for (let i = 0; i < text.length; i++) {
@@ -89,33 +90,81 @@ const typeText = async (el, text) => {
   }
 };
 
-
 const saveChat = async (question, answer, error) => {
-  if (GUEST || !auth || !auth.currentUser || !db) return;
-  const uid = auth.currentUser.uid;
-  const col = collection(db, 'users', uid, 'chats');
-  const payload = { question, answer: answer || '', error: error || '', createdAt: serverTimestamp() };
-  try { await addDoc(col, payload); } catch {}
+  if (GUEST) return;
+  try {
+    await api('/chats', {
+      method: 'POST',
+      body: JSON.stringify({ question, answer: answer || '', error: error || '' })
+    });
+  } catch {}
 };
 
 document.getElementById('signin').addEventListener('click', async () => {
   const email = emailInput.value.trim();
   const password = passwordInput.value.trim();
   if (!email || !password) return;
-  await signInWithEmailAndPassword(auth, email, password);
+  try {
+    const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Login failed');
+    localStorage.setItem(TOKEN_KEY, data.token);
+    userSpan.textContent = data.user?.email || email;
+    authView.classList.add('hidden');
+    chatView.classList.remove('hidden');
+    loadHistory();
+  } catch (err) {
+    alert(err.message || 'Login failed');
+  }
 });
 
 document.getElementById('signup').addEventListener('click', async () => {
   const email = emailInput.value.trim();
   const password = passwordInput.value.trim();
   if (!email || !password) return;
-  await createUserWithEmailAndPassword(auth, email, password);
+  try {
+    const r = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Signup failed');
+    localStorage.setItem(TOKEN_KEY, data.token);
+    userSpan.textContent = data.user?.email || email;
+    authView.classList.add('hidden');
+    chatView.classList.remove('hidden');
+  } catch (err) {
+    alert(err.message || 'Signup failed');
+  }
 });
 
-document.getElementById('signout').addEventListener('click', async () => {
+document.getElementById('signout').addEventListener('click', () => {
   if (GUEST) return;
-  await signOut(auth);
+  localStorage.removeItem(TOKEN_KEY);
+  userSpan.textContent = '';
+  authView.classList.remove('hidden');
+  chatView.classList.add('hidden');
+  messages.innerHTML = '';
 });
+
+const checkAuth = async () => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    authView.classList.remove('hidden');
+    chatView.classList.add('hidden');
+    return;
+  }
+  try {
+    const r = await api('/auth/me');
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    userSpan.textContent = data.email || data.id;
+    authView.classList.add('hidden');
+    chatView.classList.remove('hidden');
+    loadHistory();
+  } catch {
+    localStorage.removeItem(TOKEN_KEY);
+    authView.classList.remove('hidden');
+    chatView.classList.add('hidden');
+  }
+};
 
 if (GUEST) {
   userSpan.textContent = 'Guest';
@@ -123,19 +172,7 @@ if (GUEST) {
   chatView.classList.remove('hidden');
   document.getElementById('signout').style.display = 'none';
 } else {
-  onAuthStateChanged(auth, user => {
-    if (user) {
-      userSpan.textContent = user.email || user.uid;
-      authView.classList.add('hidden');
-      chatView.classList.remove('hidden');
-      loadHistory();
-    } else {
-      userSpan.textContent = '';
-      chatView.classList.add('hidden');
-      authView.classList.remove('hidden');
-      messages.innerHTML = '';
-    }
-  });
+  checkAuth();
 }
 
 document.getElementById('chat-form').addEventListener('submit', async (e) => {
@@ -170,17 +207,16 @@ document.getElementById('chat-form').addEventListener('submit', async (e) => {
   sendBtn.textContent = '发送';
   questionInput.disabled = false;
 });
+
 const loadHistory = async () => {
-  if (!auth || !auth.currentUser || !db) return;
+  if (GUEST) return;
   messages.innerHTML = '';
-  const uid = auth.currentUser.uid;
-  const col = collection(db, 'users', uid, 'chats');
-  const q = query(col, orderBy('createdAt', 'asc'), limit(100));
   try {
-    const snap = await getDocs(q);
-    snap.forEach(doc => {
-      const d = doc.data() || {};
-      const ts = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toLocaleTimeString() : nowTs();
+    const r = await api('/chats');
+    if (!r.ok) return;
+    const data = await r.json();
+    (data.chats || []).forEach(d => {
+      const ts = d.createdAt ? new Date(d.createdAt).toLocaleTimeString() : nowTs();
       if (d.question) renderUserMsg(d.question, ts);
       const text = d.answer || d.error || '';
       if (text) renderBotMsg(text, ts);
