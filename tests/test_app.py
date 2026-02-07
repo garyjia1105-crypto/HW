@@ -7,7 +7,7 @@ from app import app
 client = TestClient(app)
 
 def test_root():
-    r = client.get("/")
+    r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert isinstance(body, dict)

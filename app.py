@@ -64,10 +64,11 @@ app = FastAPI()
 class Query(BaseModel):
     question: str
 
-@app.get("/")
+@app.get("/health")
 def read_root():
     return {"message": "BEE EDU RAG Application is live!", "version": "v1"}
 
+@app.get("/")
 @app.get("/ui")
 def ui():
     ui_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
