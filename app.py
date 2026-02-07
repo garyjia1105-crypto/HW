@@ -144,8 +144,23 @@ def ui():
 
 @app.get("/api/status")
 def api_status():
-    db = get_db()
-    return {"mongo": db is not None}
+    mongo_uri_set = bool(MONGODB_URI)
+    db = None
+    err = None
+    if mongo_uri_set:
+        try:
+            client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+            db = client.get_default_database()
+            client.admin.command("ping")
+        except Exception as e:
+            err = type(e).__name__
+            if "auth" in str(e).lower() or "8000" in str(e):
+                err = "auth_failed"
+            elif "timeout" in str(e).lower():
+                err = "timeout"
+            elif "getaddrinfo" in str(e).lower() or "nodename" in str(e).lower():
+                err = "dns_error"
+    return {"mongo": db is not None, "mongo_uri_set": mongo_uri_set, "error": err}
 
 @app.post("/auth/signup")
 def auth_signup(body: SignUp):
